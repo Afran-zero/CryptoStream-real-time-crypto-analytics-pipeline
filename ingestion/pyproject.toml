@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ingestion"
+version = "0.1.0"
+description = "CryptoStream ingestion service: WebSocket → Kafka"
+requires-python = ">=3.11"
+dependencies = [
+    "confluent-kafka>=2.5",
+    "websockets>=12",
+    "pydantic>=2.6",
+    "orjson>=3.10",
+    "cryptostream-common",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+ingestion = "ingestion.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: real WebSocket loop tests; skipped by `pytest -q`",
+]

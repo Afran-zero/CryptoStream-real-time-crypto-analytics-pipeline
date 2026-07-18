@@ -1,0 +1,32 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: "Raw canonical price ticks landed by the Spark stream (Module 4)."
+    schema: bronze
+    tables:
+      - name: prices_raw
+        description: "Idempotently inserted price ticks, deduplicated on (symbol, exchange, event_time)."
+        freshness:
+          warn_after: { count: 10, period: minute }
+          error_after: { count: 30, period: minute }
+        loaded_at_field: ingested_at
+        columns:
+          - name: id
+            description: "Surrogate primary key."
+          - name: symbol
+            description: "Symbol/exchange pair in canonical `BTCUSD` form."
+          - name: exchange
+            description: "Source exchange slug (e.g. `binance`, `kraken`)."
+          - name: price
+            description: "Last trade price in quote currency."
+          - name: volume
+            description: "Trade volume at the tick (nullable upstream)."
+          - name: event_time
+            description: "Exchange-emitted timestamp of the tick."
+          - name: ingested_at
+            description: "Wall-clock time the Spark job landed the row in Bronze."
+          - name: source
+            description: "Free-form upstream identifier (e.g. `freecryptoapi`)."
+          - name: raw
+            description: "Original Kafka frame as JSON, with envelope metadata for replay."

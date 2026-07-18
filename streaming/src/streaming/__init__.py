@@ -1,0 +1,1 @@
+"""CryptoStream Spark → Bronze streaming job."""

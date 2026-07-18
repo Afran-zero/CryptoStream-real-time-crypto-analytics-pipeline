@@ -1,0 +1,282 @@
+# CryptoStream — Module 1 runtime. Postgres holds the medallion DB and the
+# Airflow metadata DB on the same instance; Kafka runs single-node KRaft.
+# Healthcheck timings tuned for a cold local boot: pg ~3s, kafka ~15s, airflow ~30s.
+
+# Shared env for every Airflow service. The DAGs reach Bronze via the
+# `postgres_default` connection and dbt via POSTGRES_*; module 6 keeps both
+# in one block so the three airflow services stay aligned.
+x-airflow-common: &airflow-common
+  AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR}
+  AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB}
+  DBT_PROFILES_DIR: /opt/airflow/transforms
+
+services:
+
+  # ---- Postgres (medallion DB + airflow metadata DB on the same instance) ---
+  postgres:
+    image: postgres:16
+    container_name: cs_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    networks: [cryptostream]
+
+  # ---- Kafka (KRaft, single node) -------------------------------------------
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: cs_kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [cryptostream]
+
+  kafka-init:
+    image: apache/kafka:3.8.0
+    container_name: cs_kafka_init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC_PRICES: ${KAFKA_TOPIC_PRICES}
+      KAFKA_TOPIC_DLQ: ${KAFKA_TOPIC_DLQ}
+    volumes:
+      - ./infra/kafka:/scripts:ro
+    entrypoint: ["bash", "/scripts/create_topics.sh"]
+    restart: "no"
+    networks: [cryptostream]
+
+  # ---- Spark (idle base container; Module 4 spark-submits into it) ---------
+  spark:
+    image: apache/spark:3.5.1
+    container_name: cs_spark
+    restart: unless-stopped
+    environment:
+      SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR}
+      DATABASE_URL: ${DATABASE_URL}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_TOPIC_PRICES: ${KAFKA_TOPIC_PRICES}
+      PYTHONPATH: /app/streaming/src:/app/cryptostream_common/src
+    volumes:
+      - spark_checkpoints:/checkpoints
+      - ./streaming:/app/streaming
+      - ./cryptostream_common:/app/cryptostream_common
+    working_dir: /app/streaming
+    command: ["tail", "-f", "/dev/null"]
+    networks: [cryptostream]
+
+  # ---- Airflow (Module 6: custom image with dbt-postgres pre-installed) ----
+  airflow-init:
+    build:
+      context: .
+      dockerfile: orchestration/Dockerfile
+    container_name: cs_airflow_init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *airflow-common
+    volumes:
+      - ./orchestration/dags:/opt/airflow/dags:ro
+      - ./transforms:/opt/airflow/transforms:ro
+    entrypoint: ["bash", "-lc"]
+    command:
+      - |
+        airflow db migrate && \
+        airflow users list 2>/dev/null | grep -qw "${AIRFLOW_ADMIN_USER}" || \
+          airflow users create \
+            --username "${AIRFLOW_ADMIN_USER}" \
+            --password "${AIRFLOW_ADMIN_PASSWORD}" \
+            --firstname Admin --lastname User \
+            --role Admin --email admin@cryptostream.local && \
+        airflow connections delete postgres_default 2>/dev/null || true && \
+        airflow connections add postgres_default \
+          --conn-type postgres \
+          --conn-host postgres \
+          --conn-schema "${POSTGRES_DB}" \
+          --conn-login "${POSTGRES_USER}" \
+          --conn-password "${POSTGRES_PASSWORD}" \
+          --conn-port 5432 && \
+        airflow variables set bronze_retention_days "${BRONZE_RETENTION_DAYS:-7}"
+    restart: "no"
+    networks: [cryptostream]
+
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: orchestration/Dockerfile
+    container_name: cs_airflow_webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-common
+    volumes:
+      - ./orchestration/dags:/opt/airflow/dags:ro
+      - ./transforms:/opt/airflow/transforms:ro
+    command: ["webserver"]
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health | grep -q '\"metadatabase\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks: [cryptostream]
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: orchestration/Dockerfile
+    container_name: cs_airflow_scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-common
+    volumes:
+      - ./orchestration/dags:/opt/airflow/dags:ro
+      - ./transforms:/opt/airflow/transforms:ro
+    command: ["scheduler"]
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $$(hostname)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks: [cryptostream]
+
+  # ---- Ingestion (Module 3: WebSocket → Kafka) ------------------------------
+  ingestion:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    container_name: cs_ingestion
+    restart: on-failure
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      FREECRYPTO_WS_URL: ${FREECRYPTO_WS_URL}
+      FREECRYPTO_API_KEY: ${FREECRYPTO_API_KEY}
+      WATCHLIST: ${WATCHLIST}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_TOPIC_PRICES: ${KAFKA_TOPIC_PRICES}
+      KAFKA_TOPIC_DLQ: ${KAFKA_TOPIC_DLQ}
+      FREECRYPTO_SUBSCRIBE_FMT: ${FREECRYPTO_SUBSCRIBE_FMT:-action_symbols}
+      SUBSCRIBE_TIMEOUT_S: ${SUBSCRIBE_TIMEOUT_S:-10}
+      RECONNECT_INITIAL_S: ${RECONNECT_INITIAL_S:-1}
+      RECONNECT_CAP_S: ${RECONNECT_CAP_S:-30}
+    networks: [cryptostream]
+
+  # ---- dbt (Module 5: Silver + Gold transformations) ------------------------
+  # `make dbt` runs this as a one-shot container; no long-running service.
+  # Postgres connection details come from POSTGRES_* (preferred) or fall back
+  # to the compose defaults so the same profiles.yml works on the host.
+  dbt:
+    image: ghcr.io/dbt-labs/dbt-postgres:1.8.0
+    container_name: cs_dbt
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DBT_PROFILES_DIR: /dbt
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./transforms:/dbt
+    working_dir: /dbt
+    networks: [cryptostream]
+
+  # ---- API (Module 7: FastAPI Gold read service) ----------------------------
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: cs_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      GOLD_SCHEMA: ${GOLD_SCHEMA:-gold}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8000}
+      DB_POOL_MIN: "${DB_POOL_MIN:-1}"
+      DB_POOL_MAX: "${DB_POOL_MAX:-8}"
+      API_PORT: "8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [cryptostream]
+
+  # ---- Dashboard (Module 7: React + Vite, served by nginx) ------------------
+  # VITE_API_BASE is baked into the JS bundle at build time; the dev
+  # container is the Vite dev server (port 5173), the prod build is
+  # the static nginx bundle (port 80 → mapped to 5173 for parity).
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+        VITE_WATCHLIST: ${VITE_WATCHLIST:-BTCUSD,ETHUSD,SOLUSD}
+    container_name: cs_dashboard
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [cryptostream]
+
+# ---- Networks ---------------------------------------------------------------
+networks:
+  cryptostream:
+    name: cryptostream
+
+# ---- Volumes ----------------------------------------------------------------
+volumes:
+  pg_data:
+  spark_checkpoints:

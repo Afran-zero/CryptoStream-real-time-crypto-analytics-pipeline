@@ -1,0 +1,56 @@
+# env
+.env
+*.env.local
+
+# editor / agent state
+.puku-cli/
+.vscode/
+.idea/
+
+# logs
+*.log
+logs/
+
+# data artifacts
+*.csv
+*.parquet
+data/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.venv/
+venv/
+
+# node / react
+node_modules/
+.npm/
+.vite/
+
+# spark / checkpoints (local artifacts)
+metastore_db/
+derby.log
+*.out
+
+# editor / OS
+.DS_Store
+Thumbs.db
+
+# airflow local artifacts
+airflow.cfg
+airflow.db
+logs/
+
+# dbt build artifacts
+transforms/target/
+transforms/dbt_packages/
+transforms/logs/

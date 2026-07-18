@@ -1,0 +1,97 @@
+:root {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: #0e1117;
+  color: #e6e6e6;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1 {
+  margin: 0 0 24px;
+  font-size: 22px;
+  letter-spacing: 0.4px;
+}
+
+.row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.badge .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.badge.green  { background: rgba(46,160,67,0.15);  color: #56d364; }
+.badge.green .dot  { background: #56d364; }
+.badge.amber  { background: rgba(212,145,15,0.15); color: #e3b341; }
+.badge.amber .dot  { background: #e3b341; }
+.badge.red    { background: rgba(248,81,73,0.15);  color: #f97583; }
+.badge.red .dot    { background: #f97583; }
+
+select, button {
+  font: inherit;
+  background: #1c2129;
+  color: inherit;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+
+.panel {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #9da7b3;
+  font-weight: 500;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.kv .item {
+  background: #0e1117;
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid #30363d;
+}
+
+.kv .symbol { font-size: 12px; color: #9da7b3; }
+.kv .price  { font-size: 20px; font-weight: 600; margin-top: 4px; }
+
+.error {
+  color: #f97583;
+  font-size: 13px;
+}

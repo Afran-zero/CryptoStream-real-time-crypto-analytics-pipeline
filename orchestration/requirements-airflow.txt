@@ -1,0 +1,8 @@
+# CryptoStream — Airflow runtime deps (Module 6).
+# Apache Airflow 2.9.3 ships its own constraints; we layer these on top.
+apache-airflow==2.9.3
+apache-airflow-providers-postgres==5.11.2
+apache-airflow-providers-common-sql==1.14.2
+dbt-core==1.8.0
+dbt-postgres==1.8.0
+psycopg[binary]>=3.2

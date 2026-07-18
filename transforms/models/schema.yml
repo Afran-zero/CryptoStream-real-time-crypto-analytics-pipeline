@@ -1,0 +1,70 @@
+version: 2
+
+models:
+  - name: stg_prices
+    description: "Silver — deduplicated, typed, validated price ticks from Bronze."
+    columns:
+      - name: symbol
+        description: "Symbol in canonical `BTCUSD` form."
+        tests:
+          - not_null
+      - name: exchange
+        description: "Source exchange slug."
+        tests:
+          - not_null
+      - name: price
+        description: "Last trade price."
+        tests:
+          - not_null
+      - name: event_time
+        description: "Exchange-emitted tick timestamp."
+        tests:
+          - not_null
+          - unique
+      - name: source
+        description: "Upstream identifier."
+        tests:
+          - not_null
+      - name: ingested_at
+        description: "Wall-clock landing time in Bronze."
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.accepted_range:
+          column_name: price
+          min_value: 0
+          inclusive: false
+
+  - name: candles_1m
+    description: "Gold — 1-minute OHLC candles per (symbol, exchange)."
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: exchange
+        tests: [not_null]
+      - name: bucket
+        tests: [not_null]
+      - name: open
+        tests: [not_null]
+      - name: high
+        tests: [not_null]
+      - name: low
+        tests: [not_null]
+      - name: close
+        tests: [not_null]
+      - name: volume
+        tests: [not_null]
+
+  - name: candles_1m_ma
+    description: "Gold — 20-bucket moving average of `close` per (symbol, exchange)."
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: exchange
+        tests: [not_null]
+      - name: bucket
+        tests: [not_null]
+      - name: close
+        tests: [not_null]
+      - name: ma_20
+        description: "20-period MA of close. NULL for the first 19 buckets of each symbol."
